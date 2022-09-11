@@ -1,5 +1,3 @@
-
-
 #include <string.h>
 #include "LCD_HD44780.hh"
 #include "Arduino.h"
@@ -116,7 +114,7 @@ void LCD_Display:: print_pins( ) const
         Serial.print( data_bus[ n ] );
         Serial.print( "\n" );
         } // end for
-    }
+    } // end pin_pins( )
 bool LCD_Display::attach_LCD_display( const int8_t _data_bus[ 8 ], const uint8_t _rs, const uint8_t _rw, const uint8_t _e, 
     const MPU_bit_interf bit_inter, const enum func_set n_f )
     {
@@ -133,16 +131,16 @@ bool LCD_Display::attach_LCD_display( const int8_t _data_bus[ 8 ], const uint8_t
 
     Serial.print( "Returning from attach_LCD_display\n" );
     return true;
-    } // end attach_LCD_display( )
+    } // end attach_LCD_display()
 
-void LCD_Display::init_LCD( const Move_csr csr_mv, const Disp_Shft_on_w shift_disp, const bool csr_on, const bool csr_blinks )
+void LCD_Display::init_LCD( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, const bool csr_on, const bool csr_blinks )
     {
-    init_LCD( interface_m, disp_info, mv_crsr, shfts_w, csr_on, csr_blinks );
+    init_LCD( interface_m, disp_info, csr_mv, shfts_w, csr_on, csr_blinks );
     } // end init_LCD( )
 
 // Initiailzation By Instructions B/c necessary if the power supply conditions for correctly operating
 // the internal reste aren't met.
-void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set n_f, const Move_csr csr_mv, const Disp_Shft_on_w shift_disp, 
+void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set n_f, const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, 
                             const bool csr_on, const bool csr_blinks )
     {
     static bool has_been_called = false;
@@ -186,7 +184,7 @@ void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set 
 
     // Set Display According to desires
     display_state_control( true, csr_on, csr_blinks );
-
+    d_c_b = 1 << 2 | csr_on << 1 | csr_blinks;
     // Done
     } // end init_LCD( )
 
@@ -211,16 +209,6 @@ void LCD_Display::set_read_write( const uint8_t rw_pin )
     rw = rw_pin; 
     pinMode( rw, OUTPUT );
     } // end set_read_write( )
-bool LCD_Display::is_good( ) const
-    {
-    return     check_db( data_bus, interface_m )
-            && rs != -1
-            && get_pinMode( rs ) == OUTPUT
-            && rw != -1
-            && get_pinMode( rw ) == OUTPUT
-            && en != -1;
-    } // end is_good( )
-
 
 void LCD_Display::set_enable( const uint8_t e_pin )
     { 
@@ -234,52 +222,160 @@ void LCD_Display::set_bit_interface( const MPU_bit_interf bit_inter )
     interface_m = bit_inter; 
     } // end set_bit_interface( )
 
-bool LCD_Display::clear_display( )
+bool LCD_Display::is_good( ) const
+    {
+    return     check_db( data_bus, interface_m )
+            && rs != -1
+            && get_pinMode( rs ) == OUTPUT
+            && rw != -1
+            && get_pinMode( rw ) == OUTPUT
+            && en != -1;
+    } // end is_good( )
+
+//---------------------------------------------------------------------------------------------------
+//
+//                                     Top-Level Interface Declarations
+//
+//---------------------------------------------------------------------------------------------------    
+
+bool LCD_Display::type_chars( const char *c_string, const Csr_Pos_t csr_pos )
+    {
+    if ( csr_pos.valid( ) )
+        if ( jmp_pos( csr_pos ) )
+            return false;
+    
+    for ( char const *ptr = c_string; *ptr; ++ptr )
+        put_char( *ptr );
+    return true;
+    } // end type_chars( )
+
+
+void LCD_Display::put_char( const char character )
+    {
+    
+    if ( csr_dir == Csr_Dir::Increment && csr_pos.pos == upper_pos_c || 
+         csr_dir == Csr_Dir::Decrement && csr_pos.pos == 0 )
+        {
+        
+        } // end if
+    } // end put_char( )
+
+bool LCD_Display::jmp_pos( const Csr_Pos_t new_pos )
+    {
+    if ( !csr_pos.valid( disp_info & row_bit_c ) )
+        {
+        return false;
+        } // end if
+
+    csr_pos = new_pos;
+
+    // Ensures a range of [0, 40] for row one
+    // and [0x40 to 0x67] for row two.
+    set_DDRAM_addr( disp_offset_c[ new_pos.row ] + 
+                    (( disp_strt_pos + new_pos.pos ) % display_upper_c) );
+    return true;
+    } // end jmp_pos( )
+
+void LCD_Display::clear_row( const int8_t row_num )
+    {
+    // Checks if row num is gte to 0 and lt 1 or 2 (depending of display info).
+    assert( row_num >= 0 && row_num < ( disp_info & row_bit_c ) + 1 );
+
+    if ( shfts_w == Disp_Shft_on_w::Yes )
+        entry_m_set( csr_dir, Disp_Shft_on_w::No ); // Temporarily
+    
+    Csr_Pos_t hold_pos = csr_pos;
+    // Move cursor to beginning.
+    jmp_pos( { row_num, 0 } );
+
+    // Write spaces to all 40 digits
+    for ( int n = 0; n < display_upper_c; ++n )
+        write_CG_DDRAM( ' ', false ); //! Needs to override BF check 
+
+    // Restore previous cursor position.
+    csr_pos = hold_pos;
+    jmp_pos( csr_pos );
+
+    if ( shfts_w == Disp_Shft_on_w::Yes )
+        entry_m_set( csr_dir, Disp_Shft_on_w::Yes ); // Change back.
+        
+    } // end clear_row( )
+
+void LCD_Display::shift_cursor ( const Direction dir )
+    {
+    
+    } // end shift_cursor( )
+
+void LCD_Display::display_ctrl( const bool on )
+    {
+    d_c_b &= ( on << 2 | ~DB2 );
+    display_state_control( on, d_c_b & DB1, d_c_b & DB0 );
+    } // end display_ctrl( )
+
+void LCD_Display::csr_ctrl( const bool crsr_on, const bool blink )
+    {
+    d_c_b &= ( DB2 | crsr_on << 1 | blink );
+    display_state_control( d_c_b & DB2, crsr_on, blink );
+    } // end csr_ctrl( )
+
+void LCD_Display::toggle_display( )
+    {
+    d_c_b ^= DB2;
+    display_state_control( d_c_b & DB2, d_c_b & DB1, d_c_b & DB0 );
+    } // end toggle_display( )
+
+void LCD_Display::toggle_cursor( )
+    {
+    d_c_b ^= DB1;
+    display_state_control( d_c_b & DB2, d_c_b & DB1, d_c_b & DB0 );
+    } // end toggle_cursor( )
+
+void LCD_Display::toggle_cursor_blink( )
+    {
+    d_c_b ^= DB0;
+    display_state_control( d_c_b & DB2, d_c_b & DB1, d_c_b & DB0 );
+    } // end toggle_cursor_blink( )
+
+bool LCD_Display::clear_display( const bool check_BF )
     {
     if ( !is_good( ) )
         return false;
     uint16_t inst = HD44790U_Inst::clear_display;
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF );
+    delay( 1 ); // Wait about 1 milliseconds.
     return true;
     } // end clear_display( )
 
-bool LCD_Display::ret_home( )
+bool LCD_Display::ret_home( const bool check_BF )
     {
     if ( !is_good( ) )
         return false;
+    Serial.print( "In ret_home\n" );
     uint16_t inst = HD44790U_Inst::ret_home;
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF );
+    delay( 1 ); // Wait about 1 milliseconds.
+
+    // Return the cursor position to {0,0}
+    csr_pos = { 0, 0 };
     return true;
     } // end ret_home( )
 
-void LCD_Display::entry_m_set( const Move_csr csr_mv, const Disp_Shft_on_w shift_disp )
+void LCD_Display::entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp )
     {
-    mv_crsr = csr_mv;       
+    csr_dir = csr_mv;       
     shfts_w = shift_disp;
     uint16_t inst = HD44790U_Inst::entry_m_set;
-    inst |= static_cast< int >( csr_mv ) << 1;
-    inst |= static_cast< int >( shift_disp );
+    inst |= static_cast< uint16_t >( csr_mv ) << 1;
+    inst |= static_cast< uint16_t >( shift_disp );
     mpu_interface( inst );
     } // end ret_home( )
 
-void LCD_Display::toggle_display( const bool on )
-    {
-    assert ( false );
-    } // end toggle_display( )
-
-void LCD_Display::toggle_cursor( const bool on )
-    {
-    assert ( false );
-    } // end toggle_cursor( )
-
-void LCD_Display::toggle_cursor_blink( const bool on )
-    {
-    assert ( false );
-    } // end toggle_cursor_blink( )
 
 void LCD_Display::display_state_control( const bool disp_on, const bool csr_on, const bool csr_blinks )
     {
+#ifdef DEBUG
     Serial.print( "In display_state_control\n" );
+#endif
     uint16_t inst = HD44790U_Inst::disp_io_ctrl;
     inst |= ( disp_on ? 1 : 0 ) << 2;
     inst |= ( csr_on ? 1 : 0 ) << 1;
@@ -296,26 +392,31 @@ void LCD_Display::move_cursor( const Direction dir )
 
 void LCD_Display::shift_display( const Direction dir )
     {
+    assert( dir == Direction::Left || dir == Direction::Right );
     uint16_t inst = shift_helper( D_C::Display , dir ); 
     mpu_interface( inst );
+    disp_strt_pos += ( dir == Direction::Left ? 1 : display_upper_c - 1 );
+    disp_strt_pos %= display_upper_c; // In case goes over 39.
     } // end shift_display( )
 
 uint16_t shift_helper( const D_C d_or_c,  const Direction dir )
     {
     uint16_t inst = HD44790U_Inst::csr_disp_shft;
-    inst |= static_cast< int > ( d_or_c ) << 3; // S/C
-    inst |= static_cast< int >( dir ) << 2; // D/L
+    inst |= static_cast< uint16_t > ( d_or_c ) << 3; // S/C
+    inst |= static_cast< uint16_t >( dir ) << 2; // D/L
     return inst;
     } // end shift_helper( )
 
 void LCD_Display::function_set( const MPU_bit_interf bit_interface, const enum func_set n_f, const bool check_BF )
     {
+#ifdef DEBUG
     Serial.print( "In function_set\n" );
+#endif
     interface_m = bit_interface;
     disp_info = n_f;
     uint16_t inst = HD44790U_Inst::func_set;
-    inst |= static_cast< int > ( bit_interface ) << 4; // S/C
-    inst |= static_cast< int > ( n_f ) << 2; // S/C
+    inst |= static_cast< uint16_t > ( bit_interface ) << 4; // S/C
+    inst |= static_cast< uint16_t > ( n_f ) << 2; // S/C
     mpu_interface( inst, check_BF );
     } // end function_set( 0)
 
@@ -340,14 +441,14 @@ bool LCD_Display::is_busy( ) const
 
 uint8_t LCD_Display::get_addr_counter( ) const
     {
-    return read( ) & ( ( 1 << 7 ) - 1 );
+    return read( ) & ( DB7 - 1 );
     } // end get_addr_counter( )
 
-void LCD_Display::write_CG_DDRAM( const uint8_t data_byte )
+void LCD_Display::write_CG_DDRAM( const uint8_t data_byte, const bool check_BF )
     {
     uint16_t inst = HD44790U_Inst::wr_data_CG_DDRAM;
     inst |= data_byte;
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF);
     } // end write_CG_DDRAM( )
 
 
@@ -360,14 +461,15 @@ uint8_t LCD_Display::read_CG_DDRAM( )
 
 void LCD_Display::mpu_interface( uint16_t& bits, const bool check_BF )
     {
+#ifdef DEBUG
     Serial.print( "Call mpu_interface: ");
     Serial.print( bits, BIN );
     Serial.print( "\n" );
+#endif
 
     // assert( is_good( ) );
     const bool is_read = bits & rw_mask_c; // True if read, false if write
 
-    
     while( check_BF && is_busy( ) ) // Wait until BF==0
         {
         Serial.print( "is_busy\n" );
@@ -381,25 +483,30 @@ void LCD_Display::mpu_interface( uint16_t& bits, const bool check_BF )
     MR_MPU = bits;
     } // end send_instr( )
 
-void write_four_db( const int8_t data_bus[ 4 ], const uint8_t data );
+static void write_four_db( const int8_t data_bus[ 4 ], const uint8_t data );
 void LCD_Display::write( const uint8_t db0_7, const bool data )
     {
     set_db_io( OUTPUT ); // Set pin mode appropiately
     digitalWrite( rs, data ? HIGH : LOW ); // Send whether is read or write
     digitalWrite( rw, LOW ); // To signify write
+    delayMicroseconds( 1 ); // tsu1 == 100 ns (RS, R/W setup time)
     digitalWrite( en, HIGH ); // Pull up enable
 
+#ifdef DEBUG
     Serial.print( "Sending for DB7 - DB4: 0b" );
     Serial.print( db0_7 >> 4, BIN );
     Serial.print( "\n" );
+#endif
+
     write_four_db( data_bus + 4, db0_7 >> 4 ); // Send db4 - db7
     if ( interface_m == MPU_bit_interf::Four )
         {
         // Pull down enable and up again
         // Setup (tDSW == 80ns )
-        delay( 1 );
+        // delayMicroseconds( 1 );
         digitalWrite( en, LOW ); // Pull down enable
         // Hold time (hH == 10ns ) -> Way too low to be of concern
+        // delayMicroseconds( 1 );     // th_min (10ns)
         digitalWrite( en, HIGH ); // Pull up enable
         write_four_db( data_bus + 4, db0_7 ); // Send db0 - db3
         } // end if
@@ -407,12 +514,15 @@ void LCD_Display::write( const uint8_t db0_7, const bool data )
         {
         write_four_db( data_bus, db0_7 ); // Send db0 - db3
         } // end else
+#ifdef DEBUG
     Serial.print( "Sending for DB0 - DB3: 0b" );
     Serial.print( db0_7 & ( ( 1 << 4 ) - 1 ), BIN );
     Serial.print( "\n" );
-    delay( 1 );
+#endif
 
+    // delayMicroseconds( 1 );
     digitalWrite( en, LOW ); // Pull down enable
+        
     } // end write_inst( )
 
 void write_four_db( const int8_t data_bus[ 4 ], const uint8_t data )
@@ -424,26 +534,35 @@ void write_four_db( const int8_t data_bus[ 4 ], const uint8_t data )
         } // end for
     } // end write_four_db( )
 
-uint8_t read_four_db( const int8_t data_bus[ 4 ] );
+#define TDDR 1
+
+static uint8_t read_four_db( const int8_t data_bus[ 4 ] );
 uint8_t LCD_Display::read( const bool data ) const
     {
     set_db_io( INPUT ); // Set pin mode to in to read
     digitalWrite( rs, data ? HIGH : LOW ); // Send whether is read or write
     digitalWrite( rw, HIGH ); // To signify read
+    // delayMicroseconds( 1 ); // tsu1 == 100 ns (RS, R/W setup time)
     digitalWrite( en, HIGH ); // Pull up enable
     uint8_t db;
     int8_t const *db_ptr = data_bus + 4;
 
+    // Max Delay is 360ns (tDDR)
+    delayMicroseconds( TDDR );
     db = read_four_db( db_ptr ); // Read in DB4 - DB7
 
+#ifdef DEBUG
     Serial.print( "For DB4 - DB7 got: 0b" );
     Serial.print( db, BIN );
     Serial.print( "\n" );
+#endif
     if ( interface_m == MPU_bit_interf::Four )
         {
         // Pull down enable and up again
         digitalWrite( en, LOW ); // Pull down enable
+        delayMicroseconds( 1 );     // th_min (10ns)
         digitalWrite( en, HIGH ); // Pull up enable
+        delayMicroseconds( TDDR ); // Wait until tDDR_max passes (360ns)
         } // end if
     else
         {
@@ -452,9 +571,11 @@ uint8_t LCD_Display::read( const bool data ) const
     db <<= 4;
     db |= read_four_db( data_bus ); // Read in DB0 - DB3
 
+#ifdef DEBUG
     Serial.print( "For DB3 - DB0 got: 0b" );
     Serial.print( db >> 4, BIN );
     Serial.print( "\n" );
+#endif
 
     digitalWrite( en, LOW ); // Pull down enable
     return db;
@@ -477,7 +598,7 @@ uint8_t read_four_db( const int8_t data_bus[ 4 ] )
 void LCD_Display::set_db_io( const int pin_mode ) const
     {
     for ( int8_t const *db_ptr = data_bus + ( interface_m == MPU_bit_interf::Four ? 4 : 0 ); 
-        db_ptr != data_bus + sizeof( data_bus ) / sizeof( int8_t ); ++db_ptr )
+        db_ptr != data_bus + ( sizeof( data_bus ) / sizeof( int8_t ) ); ++db_ptr )
         {
         pinMode( *db_ptr, pin_mode );
         } // end for

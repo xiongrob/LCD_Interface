@@ -5,15 +5,15 @@
 #include <stdint.h> // for uint8_t
 #include "assert.h"
 
-
 // If Four is selected, data_bus[4:7] are ignored.
 enum class MPU_bit_interf { Four, Eight };
 
-enum class Move_csr       { Decrement, Increment };
+enum class Csr_Dir { Decrement, Increment, None };
 enum class Disp_Shft_on_w { No, Yes };
 enum class D_C            { Cursor, Display };
-enum class Direction      { Left, Right };
+enum class Direction      { Left, Right, Up, Down };
 enum class IO_state       { Input, High };
+enum class Cursor_Bounds  { Stops, Continues, Ln_Br };
 
 
 // Low level instructions
@@ -66,7 +66,34 @@ enum func_set
     two_line_5x8    = 0b10, // 2 display lines 5x8  character font
     };
 
+const int row_bit_c = 1 << 1;
 const int dl_num_c = 8;
+const int lower_pos_c  = 0;
+const int upper_pos_c  = 16;
+
+struct Csr_Pos_t
+    {
+    int8_t row;
+    int8_t pos;
+
+    bool valid( const bool line_num = 2 ) const
+        {
+        return row >= 0 && row < line_num
+            && pos >= 0 && pos < upper_pos_c;
+        } // end valid( )
+    };
+
+enum class Cursor_Addr_Bounds
+    {
+    first_lower    = 0x00, // Number of lines 1
+    first_upper_N1 = 0x4F, // Number of lines 2
+    first_upper_N2 = 0x27, // Number of lines 2
+    sec_lower      = 0x40,
+    sec_upper      = 0x67,
+    };
+
+const int display_upper_c = 40; // After 40 lines, goes to next line.
+const uint8_t disp_offset_c[ 2 ] = { 0x0, 0x40 };
 
 //---------------------------------------------------------------------------------------------------
 //
@@ -81,10 +108,17 @@ class LCD_Display
     int8_t  en : 6; // enable
     int8_t  v0 : 6; // Used for changing contrast (-1 if using potentiometer). -> Make sure is analog pin
     MPU_bit_interf interface_m = MPU_bit_interf::Eight; // If Four is selected, data_bus[4:7] are ignored.
+
     uint16_t MR_MPU = 0; // Most recent sent inst (copied when send_inst was called) -> Used for checking state
-    enum func_set disp_info;
-    Move_csr mv_crsr;
-    Disp_Shft_on_w shfts_w;
+
+    // LCD Display State
+    enum func_set disp_info; // Display Information (like display lines and character font)
+    Csr_Dir csr_dir;        // What direction does cursor move on write.
+    Disp_Shft_on_w shfts_w;  // Does the Display move while writing characters?
+    Csr_Pos_t csr_pos = { 0, 0 }; // Starts at row zero, column zero.
+    uint8_t disp_strt_pos = 0; // Ranges from 0 to 39 (Used in combination of cursor position to calculate absolute position of cursor).
+    Cursor_Bounds csr_bounds = Cursor_Bounds::Continues;
+    uint8_t d_c_b; // Display, cursor, and display respectively
 public:
     LCD_Display( ) : LCD_Display( nullptr, -1, -1, -1, MPU_bit_interf::Eight ) 
         { 
@@ -98,8 +132,8 @@ public:
     // the upper 8 are ignored if 4-bit interface is used
     bool attach_LCD_display( const int8_t _data_bus[ 8 ], const uint8_t rs, const uint8_t rw, const uint8_t e, const MPU_bit_interf, const enum func_set n_f );
 
-    void init_LCD( const Move_csr csr_mv, const Disp_Shft_on_w shift_disp, const bool csr_on = false, const bool csr_blinks = false );
-    void init_LCD( const MPU_bit_interf bit_inter, const enum func_set n_f, const Move_csr csr_mv, const Disp_Shft_on_w shift_disp, 
+    void init_LCD( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, const bool csr_on = false, const bool csr_blinks = false );
+    void init_LCD( const MPU_bit_interf bit_inter, const enum func_set n_f, const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, 
                             const bool csr_on, const bool csr_blinks );
 
     // Setters
@@ -125,14 +159,51 @@ public:
     // Checks that pins are fine
     bool is_good( ) const;
 
+    //---------------------------------------------------------------------------------------------------
+    //
+    //                                     Top-Level Interface Declarations
+    //
+    //---------------------------------------------------------------------------------------------------    
+
+    /*
+     * Types Characters to Display 
+     * EFFECTS: Sends characters in c_string to display (starting at cursor).
+     */
+    bool type_chars( const char *c_string, const Csr_Pos_t crsr_pos = { -1, -1 } );
+
+    /*
+     * Puts Charcter to Display
+     * EFFECTS: Sends character to display at cursor it is (autoincrement will occur accordenly)
+     * Will either go to the next line at end or continue to shift display (as you go if so).
+     */
+    void put_char( const char character );
+
+    /*
+     * Jumps to row and position on display.
+     * EFFECTS: Moves cursor to certain location on display.
+     *          Returns true or false depending on whether or not 
+     *          it succeeded or not.
+     */
+    bool jmp_pos( const Csr_Pos_t csr_pos );
+
+
+    /*
+     * Clear Row
+     * EFFECTS: Clears entire row based on row number (all 40 digits).
+     */
+    void clear_row( const int8_t row_num );  // Clears row.
+    void shift_cursor ( const Direction dir ); // Up Down left, right.
+    void display_ctrl( const bool on );
+    void csr_ctrl( const bool crsr_on, const bool blink );
+
     /*
      * Toggle Display (Display On/Off Control)
      * EFFECTS: display is on when on is true, and off if off.
      */
-    void toggle_display( const bool on );
+    void toggle_display( );
 
-    void toggle_cursor( const bool on );
-    void toggle_cursor_blink( const bool on );
+    void toggle_cursor( );
+    void toggle_cursor_blink( );
 
     // Backdoor Functions ->
     // These functions will serve as helper functions that provides the interface provided by the manufactuers to help implement 
@@ -142,13 +213,13 @@ public:
      * EFFECTS: Writes space code 0x20 into all DDRAM addresses, sets DDARM addr 0 into AC (address counter),
      *          and returns the display to its original status (if shifted).
      */
-    bool clear_display( );
+    bool clear_display( const bool check_BF = true );
 
     /* Return Home
      * EFFECTS: Sets DDRAM address 0 into address counter, and returns the display to its original status if shifted.
      *          The DDRAM contents do not change.
      */
-    bool ret_home( );
+    bool ret_home( const bool check_BF = true );
 
     /*
      * Entry Mode Set
@@ -156,7 +227,7 @@ public:
      *          written to either DDRAM or CGRAM.
      *          Also shifts the entire display right when set to decrement or right when incrementing. 
      */
-    void entry_m_set( const Move_csr csr_mv, const Disp_Shft_on_w shift_disp );
+    void entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp );
 
 
     /*
@@ -230,7 +301,7 @@ public:
      * 
      * This is for writing characters to LCD.
      */
-    void write_CG_DDRAM( const uint8_t data_byte );
+    void write_CG_DDRAM( const uint8_t data_byte, const bool check_BF = true );
 
     /*
      * Read CG or DDRAM.
@@ -241,18 +312,52 @@ public:
      */
     uint8_t read_CG_DDRAM( );
 
-    // User calling this function is not recommended as it may cause side-effects with how the
-    // class sees the state of the LCD_display.
-    // Expect to fail if any pins being used is -1
+    /*
+     * MPU Interface 
+     * Reads in a 10-bit encoding of instruction / data read write: 
+     * <RS | R/!W | DB7 | DB6 | DB5 | DB4 | DB3 | DB2 | DB1 | DB0>
+     * EFFECTS: Considers the 10 LSBs and uses them to set the
+     * RS, rw, and data bus according.
+     * 
+     * If check_BF is true, waits for BF to be zero before writing / reading bits.
+     * 
+     * Occasionally BF checks needs to be skipped due to initialization and scenarios where
+     * BF is always high (due to the cursor being at a particular address).
+     * 
+     * Note: Not designed for users to call it directly as it puts the LCD_Display class in some
+     *       undefined state.
+     */
     void mpu_interface( uint16_t& bits, const bool check_BF = true ); // Generic which sends everything (may return bits for reading)
+
+    /*
+     * Write to MPU interface
+     * EFFECTS: Assumes a write to either the IR (instruction register) or DR (data register) -> according to whether data is false 
+     *          or true respectively. Transfers DB7-DB0 through db0_7.
+     */
     void write( const uint8_t db0_7, const bool data = false );
+    /*
+     * Read to MPU interface
+     * EFFECTS: Assumes a read from either the Address Counter and BF (busy flag) or the CG or DDRAM -> according to whether data is false 
+     *          or true respectively. Reads DB7-DB0 and returns a uint8 of it where DB7 is the MSB and DB0 the LSB.
+     */
     uint8_t read( const bool data = false ) const; // Assumes that is reading.
 
+    /*
+     * Set Data Base I/O
+     * EFFECTS: Sets the pins at db_pins to be either INPUT or OUTPUT depending on pin_mode.
+     *          This is so they can be properly configured to read or write to the MPU interface.
+     */
     void set_db_io( const int pin_mode ) const;
     }; // end LCD_Display
 
 // Erases number of characters from display from cursor.
 // Essentially sends entry mode instruction 
 
+enum class Cursor_state
+    {
+    Normal,
+    Edge_Dec,
+    Edge_Inc,
+    };
 
 #endif
