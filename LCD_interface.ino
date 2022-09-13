@@ -1,6 +1,8 @@
 #include "LCD_HD44780.hh"
 
 LCD_Display lcd_disp;
+
+/*
 void setup() {
   Serial.begin( 9600 );
   // put your setup code here, to run once:
@@ -61,6 +63,8 @@ void setup() {
         lcd_disp.entry_m_set( Csr_Dir::Decrement, Disp_Shft_on_w::No );
         } // end if
     lcd_disp.write_CG_DDRAM( 'A' + ( n % 26 ) );
+    Serial.print( lcd_disp.get_addr_counter( ), HEX );
+    Serial.print( "\n" );
     } // end for
 
   lcd_disp.entry_m_set( Csr_Dir::Increment, Disp_Shft_on_w::No );
@@ -73,7 +77,6 @@ void setup() {
   for ( int n = 0; n < 16; ++n )
     {
     lcd_disp.move_cursor( Direction::Right );
-    delay( 500 );
     } // end for
   lcd_disp.write_CG_DDRAM( 'A', false );
   lcd_disp.write_CG_DDRAM( 'B', false );
@@ -83,18 +86,87 @@ void setup() {
   for ( int n = 0; n < 8; ++n )
     {
     lcd_disp.shift_display( Direction::Left );
-    delay( 500 );
+    delay(500);
     } // end for
   lcd_disp.ret_home( );
-  lcd_disp.set_DDRAM_addr( 0xC0 );
-  delay( 5000 );
-  lcd_disp.set_DDRAM_addr( 0x40 );
-  delay( 5000 );
+  lcd_disp.move_cursor( Direction::Right, false );
+  delay( 2000 );
   lcd_disp.shift_display( Direction::Right );
-  lcd_disp.set_DDRAM_addr( 0x67 );
-} // end setup( )
 
+  Serial.print( "Passing 40th digit\n");
+  delay( 500 );
+  lcd_disp.move_cursor( Direction::Left, false ); //Passes 40th digit
+  delay( 500 );
+  lcd_disp.shift_display( Direction::Right );
+  delay( 500 );
+  lcd_disp.move_cursor( Direction::Left, false );
+  lcd_disp.ret_home( );
+  for ( int n = 0; n < 39; ++n )
+    {
+    if ( n == 15 )
+      lcd_disp.entry_m_set( Csr_Dir::Increment, Disp_Shft_on_w::Yes );
+    lcd_disp.write_CG_DDRAM( 'A' + ( n % 26 ), false );
+    } // end for
+    lcd_disp.shift_display( Direction::Left );
+    lcd_disp.shift_display( Direction::Left );
+    lcd_disp.shift_display( Direction::Left );
+    lcd_disp.shift_display( Direction::Left );
+    delay( 5000 );
+    lcd_disp.move_cursor( Direction::Left );
+    delay( 5000 );
+    lcd_disp.move_cursor( Direction::Right );
+    delay( 5000 );
+    lcd_disp.move_cursor( Direction::Right );
+    delay( 5000 );
+    lcd_disp.set_DDRAM_addr( 0 );
+    delay( 5000 );
+    lcd_disp.move_cursor( Direction::Left );
+    delay( 5000 );
+    lcd_disp.move_cursor( Direction::Left );
+} // end setup( )
+*/
+void setup() {
+  Serial.begin( 9600 );
+  // put your setup code here, to run once:
+  //int8_t db[ 8 ] = { -1, -1, -1, -1, 5, 6, 7, 8 };
+  int8_t db[ 8 ] = { 9, 10, 11, 12, 5, 6, 7, 8 };
+  Serial.print( "After db\n" );
+  lcd_disp.attach_LCD_display( db, 2, 3, 4, MPU_bit_interf::Eight, two_line_5x8 );
+  lcd_disp.init_LCD( Csr_Dir::Increment, Disp_Shft_on_w::No, true, true );
+  lcd_disp.clear_display( );
+  Serial.print( "Got here\n" );
+  lcd_disp.display_state_control( true, true, true );
+  lcd_disp.entry_m_set( Csr_Dir::Increment, Disp_Shft_on_w::No );
+  lcd_disp.ret_home( );
+  lcd_disp.write_CG_DDRAM( 'H' );
+  lcd_disp.write_CG_DDRAM( 'I' );
+  lcd_disp.write_CG_DDRAM( 'T' );
+  lcd_disp.write_CG_DDRAM( 'A' );
+  lcd_disp.write_CG_DDRAM( 'C' );
+  lcd_disp.write_CG_DDRAM( 'H' );
+  lcd_disp.write_CG_DDRAM( 'I' );
+  lcd_disp.clear_display( );
+
+  lcd_disp.put_char( 'H' );
+  lcd_disp.put_char( 'I' );
+  lcd_disp.put_char( '!' );
+  lcd_disp.get_csr_pos( ).print( );
+  lcd_disp.shift_display( Direction::Right );
+  lcd_disp.goto_next_ln( );
+  lcd_disp.get_csr_pos( ).print( );
+
+  lcd_disp.set_csr_bounds( Cursor_Bounds::Ln_Br );
+  delay( 2000 );
+  lcd_disp.ret_home( );
+  Serial.print( "done\n" );
+}
 void loop() 
     {
     // put your main code here, to run repeatedly:
+    lcd_disp.clear_display( );
+    lcd_disp.type_chars( "Arduino Rules!!!Roomba", Csr_Pos_t( 0, 0, true ) );
+    delay( 2000 );
+    lcd_disp.clear_display( );
+    lcd_disp.type_chars( "Arduino Rules!!!BLE 4ever", Csr_Pos_t( 0, 0, true ) );
+    delay( 2000 );
     }

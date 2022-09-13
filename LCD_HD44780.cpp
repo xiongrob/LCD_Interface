@@ -53,6 +53,27 @@ static bool check_db( const int8_t data_bus[ 8 ], const MPU_bit_interf bit_inter
     return true;
     } // end check_db( )
 
+void Assert( const bool statement, char const * c_string )
+    {
+    if ( !statement )
+        {  
+        for ( ; *c_string; ++c_string )
+            Serial.print( *c_string );
+        
+        delay( 1000 ); // Give enough time for characters to be pushed through serial port.
+        assert( false );
+        } // end if
+    } // end Assert( )
+
+void Csr_Pos_t::print( ) const
+    {
+    Serial.print( "Row: " );
+    Serial.print( row );
+    Serial.print( "\n" );
+    Serial.print( "Pos: " );
+    Serial.print( pos );
+    Serial.print( "\n" );
+    } // end print( )
 //---------------------------------------------------------------------------------------------------
 //
 //                                     LC_Display Definitions
@@ -163,7 +184,7 @@ void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set 
     function_set( MPU_bit_interf::Eight, func_set::one_line_5x10, false );
 
     // Wait for more than 100us
-    delay( 1 );
+    delayMicroseconds( 101 );
     function_set( MPU_bit_interf::Eight, func_set::one_line_5x10, false );
 
     // Now BF can be checked for following instructions
@@ -184,7 +205,7 @@ void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set 
 
     // Set Display According to desires
     display_state_control( true, csr_on, csr_blinks );
-    d_c_b = 1 << 2 | csr_on << 1 | csr_blinks;
+    d_c_b = DB2 | csr_on << 1 | csr_blinks;
     // Done
     } // end init_LCD( )
 
@@ -240,41 +261,63 @@ bool LCD_Display::is_good( ) const
 
 bool LCD_Display::type_chars( const char *c_string, const Csr_Pos_t csr_pos )
     {
-    if ( csr_pos.valid( ) )
-        if ( jmp_pos( csr_pos ) )
+    if ( !csr_pos.abs_pos )
+        csr_pos = rel_to_abs_pos( csr_pos );
+
+    if ( csr_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
+        if ( !jmp_abs_pos( csr_pos ) )
             return false;
-    
     for ( char const *ptr = c_string; *ptr; ++ptr )
+        {
         put_char( *ptr );
+        } // end for
     return true;
     } // end type_chars( )
 
-
 void LCD_Display::put_char( const char character )
     {
-    
-    if ( csr_dir == Csr_Dir::Increment && csr_pos.pos == upper_pos_c || 
-         csr_dir == Csr_Dir::Decrement && csr_pos.pos == 0 )
+    Assert( csr_dir == Csr_Dir::Increment, "Decrement not yet supported\n" );
+    // Check bounds and move cursor if necessary
+    if ( csr_bounds == Cursor_Bounds::Ln_Br 
+        && abs_to_rel_pos( csr_pos ).pos >= upper_rel_pos_c )
         {
-        
+        // Force the cursor to go to the new line.
+        if ( disp_info & row_bit_c )
+            {
+            goto_next_ln( );
+            }
+        // Guess we keep going else.
         } // end if
+    // Else keep going.
+    // Update cursor position
+    update_csr_pos( Direction::Right );
+    write_CG_DDRAM( character );
     } // end put_char( )
 
-bool LCD_Display::jmp_pos( const Csr_Pos_t new_pos )
+bool LCD_Display::jmp_abs_pos( const Csr_Pos_t new_pos, const bool check_BF )
     {
-    if ( !csr_pos.valid( disp_info & row_bit_c ) )
+    Assert( new_pos.abs_pos, "new_pos is not absolute position" );
+    if ( !csr_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
         {
+        Serial.print( "new_pos isn't valid\n" );
+        new_pos.print( );
         return false;
-        } // end if
+        } // end i
 
     csr_pos = new_pos;
 
     // Ensures a range of [0, 40] for row one
     // and [0x40 to 0x67] for row two.
-    set_DDRAM_addr( disp_offset_c[ new_pos.row ] + 
-                    (( disp_strt_pos + new_pos.pos ) % display_upper_c) );
+    set_DDRAM_addr( csr_to_DDRAM_ADDR( new_pos ), check_BF ); 
     return true;
-    } // end jmp_pos( )
+    } // end jmp_abs_pos( )
+
+void LCD_Display::goto_next_ln( )
+    {
+    if ( disp_info & row_bit_c )
+        Assert( jmp_abs_pos(Csr_Pos_t( !csr_pos.row, disp_strt_pos, true )), 
+            "goto_next_ln failed\n" );
+    } // end got_to_next_ln( 0)
 
 void LCD_Display::clear_row( const int8_t row_num )
     {
@@ -286,15 +329,15 @@ void LCD_Display::clear_row( const int8_t row_num )
     
     Csr_Pos_t hold_pos = csr_pos;
     // Move cursor to beginning.
-    jmp_pos( { row_num, 0 } );
+    jmp_abs_pos( { row_num, 0 } );
 
     // Write spaces to all 40 digits
-    for ( int n = 0; n < display_upper_c; ++n )
+    for ( int n = 0; n < get_display_upper_pos( ); ++n )
         write_CG_DDRAM( ' ', false ); //! Needs to override BF check 
 
     // Restore previous cursor position.
     csr_pos = hold_pos;
-    jmp_pos( csr_pos );
+    jmp_abs_pos( csr_pos );
 
     if ( shfts_w == Disp_Shft_on_w::Yes )
         entry_m_set( csr_dir, Disp_Shft_on_w::Yes ); // Change back.
@@ -303,7 +346,44 @@ void LCD_Display::clear_row( const int8_t row_num )
 
 void LCD_Display::shift_cursor ( const Direction dir )
     {
-    
+    if ( dir == Direction::Up )
+        {
+        if ( csr_pos.row > 0 )
+            {
+            --csr_pos.row;
+            if ( !jmp_abs_pos( csr_pos ) )
+                {
+                Serial.print( "Failed jmp_abs_pos in shift_cursor Direction:Up\n" );
+                Serial.print( "Row: " ); Serial.print( csr_pos.row ); Serial.print( "\n" );
+                Serial.print( "Pos: " ); Serial.print( csr_pos.pos ); Serial.print( "\n" );
+                assert ( false );
+                } // end if
+            } // end if
+        } // end if
+    else if ( dir == Direction::Down )
+        {
+        if ( csr_pos.row >= 0 && csr_pos.row < ( disp_info & row_bit_c ) + 1 )
+            {
+            ++csr_pos.row;
+            if ( !jmp_abs_pos( csr_pos ) )
+                {
+                Serial.print( "Failed jmp_abs_pos in shift_cursor Direction:Down\n" );
+                Serial.print( "Row: " ); Serial.print( csr_pos.row ); Serial.print( "\n" );
+                Serial.print( "Pos: " ); Serial.print( csr_pos.pos ); Serial.print( "\n" );
+                assert ( false );
+                } // end if
+            } // end if
+        } // end else if
+    else if ( dir == Direction::Right )
+        {
+        ++csr_pos.pos;
+        move_cursor( Direction::Right );
+        } // end else if
+    else // Direction::Left
+        {
+        --csr_pos.pos;
+        move_cursor( Direction::Left );
+        } // end else
     } // end shift_cursor( )
 
 void LCD_Display::display_ctrl( const bool on )
@@ -312,10 +392,10 @@ void LCD_Display::display_ctrl( const bool on )
     display_state_control( on, d_c_b & DB1, d_c_b & DB0 );
     } // end display_ctrl( )
 
-void LCD_Display::csr_ctrl( const bool crsr_on, const bool blink )
+void LCD_Display::csr_ctrl( const bool csr_on, const bool blink )
     {
-    d_c_b &= ( DB2 | crsr_on << 1 | blink );
-    display_state_control( d_c_b & DB2, crsr_on, blink );
+    d_c_b &= ( DB2 | csr_on << 1 | blink );
+    display_state_control( d_c_b & DB2, csr_on, blink );
     } // end csr_ctrl( )
 
 void LCD_Display::toggle_display( )
@@ -336,12 +416,22 @@ void LCD_Display::toggle_cursor_blink( )
     display_state_control( d_c_b & DB2, d_c_b & DB1, d_c_b & DB0 );
     } // end toggle_cursor_blink( )
 
+//---------------------------------------------------------------------------------------------------
+//
+//                                     MPU Interface Definitions
+//
+//---------------------------------------------------------------------------------------------------    
+
 bool LCD_Display::clear_display( const bool check_BF )
     {
     if ( !is_good( ) )
         return false;
     uint16_t inst = HD44790U_Inst::clear_display;
     mpu_interface( inst, check_BF );
+
+    // Return the cursor position to {0,0}
+    csr_pos = { 0, 0 };
+    disp_strt_pos = 0;
     delay( 1 ); // Wait about 1 milliseconds.
     return true;
     } // end clear_display( )
@@ -357,6 +447,7 @@ bool LCD_Display::ret_home( const bool check_BF )
 
     // Return the cursor position to {0,0}
     csr_pos = { 0, 0 };
+    disp_strt_pos = 0;
     return true;
     } // end ret_home( )
 
@@ -384,10 +475,33 @@ void LCD_Display::display_state_control( const bool disp_on, const bool csr_on, 
     } // end display_state_control( )
 
 uint16_t shift_helper( const D_C d_or_c,  const Direction dir );
-void LCD_Display::move_cursor( const Direction dir )
+void LCD_Display::move_cursor( const Direction dir, const bool check_BF )
     {
     uint16_t inst = shift_helper( D_C::Cursor, dir ); 
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF );
+
+    Csr_Pos_t old_pos = csr_pos;
+    update_csr_pos( dir );
+
+    // If the cursor address moves right on 0x27, moves to 0x40
+    // else if cursor address moves left on 0x00, moves to 0x67.
+    // Therefore, since this is considered undesireable behavior,
+    // we need to correct the cursor position.
+    if ( disp_info & row_bit_c ) // Two lines mode
+        {
+        if ( old_pos.row == 0 ) 
+            {
+            // Need to do corrective measures in software
+            if ( old_pos.pos == 39 && dir == Direction::Right )
+                {
+                Assert( jmp_abs_pos( { 0, 0 } ), "move_cursor jump to {0,0} failed\n" );
+                } // end if
+            else if ( old_pos.pos == 0 && dir == Direction::Left )
+                {
+                Assert( jmp_abs_pos( { 0, 39 } ), "move_cursor jump to {0,39} failed\n" );
+                } // end else if
+            } // end if
+        } // end if
     } // end move_cursor( )
 
 void LCD_Display::shift_display( const Direction dir )
@@ -395,15 +509,23 @@ void LCD_Display::shift_display( const Direction dir )
     assert( dir == Direction::Left || dir == Direction::Right );
     uint16_t inst = shift_helper( D_C::Display , dir ); 
     mpu_interface( inst );
-    disp_strt_pos += ( dir == Direction::Left ? 1 : display_upper_c - 1 );
-    disp_strt_pos %= display_upper_c; // In case goes over 39.
+    update_disp_strt_pos( dir );
+    csr_pos.pos = csr_pos.pos + ( dir == Direction::Left ? -1 : 1 );
+    if ( csr_pos.pos < lower_pos_c )
+        {
+        jmp_abs_pos( { csr_pos.row, 0 } ); // Readjust to zero
+        } // end if
+    else if ( csr_pos.pos == upper_rel_pos_c )
+        {
+        jmp_abs_pos( { csr_pos.row, upper_rel_pos_c - 1 } ); // Readjust to rightmost position.
+        } // end else if
     } // end shift_display( )
 
-uint16_t shift_helper( const D_C d_or_c,  const Direction dir )
+uint16_t shift_helper( const D_C d_or_c, const Direction dir )
     {
     uint16_t inst = HD44790U_Inst::csr_disp_shft;
-    inst |= static_cast< uint16_t > ( d_or_c ) << 3; // S/C
-    inst |= static_cast< uint16_t >( dir ) << 2; // D/L
+    inst |= static_cast< uint16_t > ( d_or_c ) << 3; // S/C (Display (S)hift / Move (C)ursor)
+    inst |= static_cast< uint16_t >( dir ) << 2;     // R/L ((R)ight/(L)eft)
     return inst;
     } // end shift_helper( )
 
@@ -415,8 +537,8 @@ void LCD_Display::function_set( const MPU_bit_interf bit_interface, const enum f
     interface_m = bit_interface;
     disp_info = n_f;
     uint16_t inst = HD44790U_Inst::func_set;
-    inst |= static_cast< uint16_t > ( bit_interface ) << 4; // S/C
-    inst |= static_cast< uint16_t > ( n_f ) << 2; // S/C
+    inst |= static_cast< uint16_t > ( bit_interface ) << 4; // DL (Data Length)
+    inst |= static_cast< uint16_t > ( n_f ) << 2;           // N+F (N)umber of DL + char (F)ont
     mpu_interface( inst, check_BF );
     } // end function_set( 0)
 
@@ -427,11 +549,17 @@ void LCD_Display::set_CGRAM_addr( const uint8_t addr_counter )
     mpu_interface( inst );
     } // end set_CGRAM_addr( )
 
-void LCD_Display::set_DDRAM_addr( const uint8_t addr_counter )
+void LCD_Display::set_DDRAM_addr( const uint8_t addr_counter, const bool check_BF )
     {
+    Assert( !( disp_info & row_bit_c ) || 
+        ( addr_counter < 40 || ( addr_counter >= 64 && addr_counter < 104 ) ),
+        "2-line mode: addr_counter isn't within bounds" );
+    Assert( ( disp_info & row_bit_c ) || ( addr_counter < 80 ),
+        "1-line mode: addr_counter isn't withint bounds" );
+    
     uint16_t inst = HD44790U_Inst::set_ddram_addr;
     inst |= addr_counter; // S/C
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF );
     } // end set_DDRAM_addr( )
 
 bool LCD_Display::is_busy( ) const
@@ -448,7 +576,13 @@ void LCD_Display::write_CG_DDRAM( const uint8_t data_byte, const bool check_BF )
     {
     uint16_t inst = HD44790U_Inst::wr_data_CG_DDRAM;
     inst |= data_byte;
-    mpu_interface( inst, check_BF);
+    mpu_interface( inst, check_BF );
+    if ( shfts_w == Disp_Shft_on_w::Yes )
+        {
+        // Moves right on decrement, and left on increment.
+        update_disp_strt_pos( csr_dir == Csr_Dir::Increment ? 
+                            Direction::Left : Direction::Right );
+        } // end if
     } // end write_CG_DDRAM( )
 
 

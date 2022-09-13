@@ -13,7 +13,7 @@ enum class Disp_Shft_on_w { No, Yes };
 enum class D_C            { Cursor, Display };
 enum class Direction      { Left, Right, Up, Down };
 enum class IO_state       { Input, High };
-enum class Cursor_Bounds  { Stops, Continues, Ln_Br };
+enum class Cursor_Bounds  { Continues, Ln_Br };
 
 
 // Low level instructions
@@ -69,19 +69,40 @@ enum func_set
 const int row_bit_c = 1 << 1;
 const int dl_num_c = 8;
 const int lower_pos_c  = 0;
-const int upper_pos_c  = 16;
+const int upper_rel_pos_c  = 16;
+const uint8_t disp_offset_c[ 2 ] = { 0x0, 0x40 };
 
+
+/*
+ * Cursor Position Type.
+ * Uses a row and position to figure out where
+ * the cursor exists.
+ * 
+ * Exists two version: absolute and relative.
+ * 
+ * Absolute is used for keeping track of the cursor within the 
+ * display data RAM. It continues to do so even after it goes
+ * out of view.
+ */
 struct Csr_Pos_t
     {
     int8_t row;
     int8_t pos;
+    bool abs_pos = true; // Uses absolute positioning or not.
 
-    bool valid( const bool line_num = 2 ) const
+    Csr_Pos_t( const int8_t _row, const int8_t _pos, const bool _abs = false ) 
+            : row( _row ), pos( _pos ), abs_pos( _abs )
         {
-        return row >= 0 && row < line_num
-            && pos >= 0 && pos < upper_pos_c;
+        } // end Csr_Pos_t( )
+
+    bool valid( const int8_t upper_pos, const bool two_line = true ) const
+        {
+        return row >= 0 && row < (static_cast <int8_t>( two_line ) + 1 )
+            && pos >= 0 && pos < upper_pos;
         } // end valid( )
+    void print( ) const;
     };
+
 
 enum class Cursor_Addr_Bounds
     {
@@ -92,8 +113,7 @@ enum class Cursor_Addr_Bounds
     sec_upper      = 0x67,
     };
 
-const int display_upper_c = 40; // After 40 lines, goes to next line.
-const uint8_t disp_offset_c[ 2 ] = { 0x0, 0x40 };
+void Assert( const bool statement, char const * c_string );
 
 //---------------------------------------------------------------------------------------------------
 //
@@ -118,7 +138,7 @@ class LCD_Display
     Csr_Pos_t csr_pos = { 0, 0 }; // Starts at row zero, column zero.
     uint8_t disp_strt_pos = 0; // Ranges from 0 to 39 (Used in combination of cursor position to calculate absolute position of cursor).
     Cursor_Bounds csr_bounds = Cursor_Bounds::Continues;
-    uint8_t d_c_b; // Display, cursor, and display respectively
+    uint8_t d_c_b : 3; // Display, cursor, and display respectively
 public:
     LCD_Display( ) : LCD_Display( nullptr, -1, -1, -1, MPU_bit_interf::Eight ) 
         { 
@@ -126,6 +146,11 @@ public:
 
     LCD_Display( const int8_t data_bus[ 8 ], const int rs, const int rw, const int e, const MPU_bit_interf );
 
+    /*
+     * Print Pin Numbers
+     * EFFECTS: Prints Arduino pin numbers for each relevant pins
+     *          in the following order: RS, RW, EN, V0, Interface mode, and DB0-DB7
+     */
     void print_pins( ) const;
 
     // Used for setting everything
@@ -148,6 +173,11 @@ public:
 
     void set_bit_interface( const MPU_bit_interf bit_inter );
 
+    void set_csr_bounds( const Cursor_Bounds _csr_bounds )
+        {
+        csr_bounds = _csr_bounds;
+        }
+
     // Getters
     uint8_t get_db( const uint8_t db_num ) const { return data_bus[ db_num ]; }
     int8_t const * get_db_arr( ) const { return data_bus; }
@@ -155,6 +185,13 @@ public:
     uint8_t get_enable( const uint8_t db_num ) const { return en; }
     uint8_t get_v0( ) const { return v0; }
     MPU_bit_interf get_bit_interface( ) const { return interface_m; }
+    Csr_Pos_t get_csr_pos( const bool _abs = true ) const
+        {
+        if ( _abs )
+            return csr_pos;
+        else
+            return abs_to_rel_pos( csr_pos );
+        } // end get_csr_pos( )
 
     // Checks that pins are fine
     bool is_good( ) const;
@@ -169,7 +206,7 @@ public:
      * Types Characters to Display 
      * EFFECTS: Sends characters in c_string to display (starting at cursor).
      */
-    bool type_chars( const char *c_string, const Csr_Pos_t crsr_pos = { -1, -1 } );
+    bool type_chars( const char *c_string, const Csr_Pos_t crsr_pos = Csr_Pos_t( -1, -1, false ) );
 
     /*
      * Puts Charcter to Display
@@ -184,8 +221,16 @@ public:
      *          Returns true or false depending on whether or not 
      *          it succeeded or not.
      */
-    bool jmp_pos( const Csr_Pos_t csr_pos );
+    bool jmp_abs_pos( const Csr_Pos_t csr_pos, const bool check_BF = true );
 
+    void goto_next_ln( );
+
+    bool can_chk_bf( ) const
+        {
+        return csr_pos.abs_pos && 
+                csr_pos.pos >= 0 &&
+                csr_pos.pos < upper_rel_pos_c;
+        } // end can_chk_bf( )
 
     /*
      * Clear Row
@@ -194,17 +239,39 @@ public:
     void clear_row( const int8_t row_num );  // Clears row.
     void shift_cursor ( const Direction dir ); // Up Down left, right.
     void display_ctrl( const bool on );
-    void csr_ctrl( const bool crsr_on, const bool blink );
+    void csr_ctrl( const bool csr_on, const bool blink );
 
     /*
      * Toggle Display (Display On/Off Control)
-     * EFFECTS: display is on when on is true, and off if off.
+     * EFFECTS: Toggles display, cursor, and cursor blink on->off off->on.
      */
     void toggle_display( );
 
     void toggle_cursor( );
     void toggle_cursor_blink( );
 
+    // Returns 40 when in 2-line display, and 80 in 1-line display
+    // when N is 0 (1-line display), Addr can be 0x00 to 0x4F. 
+    // When N is 1 (2-line display), Addr can be 0x00 to 0x27 for the first line, 
+    //                               and 0x40 to 0x67 for the second line.
+    uint8_t get_display_upper_pos( ) const
+        {
+        return disp_info & row_bit_c ? 40 : 80;
+        } // end get_display_upper_pos( )
+
+    // Returns 0x80 if not valid
+    uint8_t csr_to_DDRAM_ADDR( const Csr_Pos_t csr_pos ) const
+        {  
+        if ( !csr_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
+            return 0x68; // Address 104 (not valid)
+        return disp_offset_c[ csr_pos.row ] + csr_pos.pos;
+        } // end csr_to_DDRAM_ADDR( )
+
+//---------------------------------------------------------------------------------------------------
+//
+//                                     MPU Interface Declarations
+//
+//---------------------------------------------------------------------------------------------------    
     // Backdoor Functions ->
     // These functions will serve as helper functions that provides the interface provided by the manufactuers to help implement 
     // the interface and will be allowed for the programmers to take advantage of (if they so please).
@@ -242,7 +309,7 @@ public:
      * EFFECTS: Moves cursor left or right (which consequencly changes address counter)
      * Cursor moves to the second line when it passes the 40th digit of the first line.
      */
-    void move_cursor  ( const Direction dir );
+    void move_cursor  ( const Direction dir, const bool check_BF = true );
     /* 
      * Shift Display
      * EFFECTS: Shifts display left or right (doesn't change AC like move_cursor)
@@ -277,7 +344,7 @@ public:
      *       When N is 1 (2-line display), can write from 00H to 0x27 for the first line
      *       and 0x40 to 0x67 for the second.
      */
-    void set_DDRAM_addr( const uint8_t addr_counter );
+    void set_DDRAM_addr( const uint8_t addr_counter, const bool check_BF = true );
 
     // Checks if BF is high (currently in an internal operation). -> This is in case programmer wants to do somethign else.
     /*
@@ -348,6 +415,63 @@ public:
      *          This is so they can be properly configured to read or write to the MPU interface.
      */
     void set_db_io( const int pin_mode ) const;
+
+private:
+    /*
+     * Update Display Start Position.
+     * EFFECTS: Updates the leftmost starting position of the
+     *          display to be 
+     */
+    void update_disp_strt_pos( const Direction disp_mv_dir )
+        {
+        disp_strt_pos = update_pos_helper( disp_strt_pos, disp_mv_dir, Direction::Left );
+        } // end update_disp_strt_pos( )
+    /*
+     * Update Cursor Postiion
+     * EFFECTS: Updates the absolute cursor position (csr_pos)
+     *                    
+     */
+    void update_csr_pos( const Direction disp_mv_dir )
+        {
+        csr_pos.pos = update_pos_helper( csr_pos.pos, disp_mv_dir, Direction::Right );
+        } // end update_csr_pos( )
+    
+    int8_t update_pos_helper( int8_t curr_pos, const Direction mv_dir, const Direction mv_right ) const
+        {
+        assert( mv_dir == Direction::Left || mv_dir == Direction::Right );
+        curr_pos += ( mv_dir == mv_right ? 1 : get_display_upper_pos( ) - 1 );
+        curr_pos %= get_display_upper_pos( );
+        return curr_pos;
+        } // end update_pos_helper( )
+
+    Csr_Pos_t rel_to_abs_pos ( const Csr_Pos_t rel_pos ) const
+        {
+        Assert( !rel_pos.abs_pos && rel_pos.valid( upper_rel_pos_c, disp_info & row_bit_c ), 
+            "Needs to be relative position and/or pos not 0 <= x <= 16\n" );
+
+        Csr_Pos_t abs_pos( rel_pos.row, 
+                           (disp_strt_pos + rel_pos.pos) % get_display_upper_pos( ), 
+                           true );
+        return abs_pos;
+        } // end rel_to_abs_pos( )
+
+    // Absoulte Pos to relative (to display_pos_start.
+    // What this means is that the position disp_strt_pos is taken
+    // as 0 and disp_strt_pos - 1, get_display_upper_pos( ) - 1.
+    // This means that 0 <= rel_pos <= get_display_upper_pos( ) - 1
+    // Still but rotated around disp_strt_pos.
+    Csr_Pos_t abs_to_rel_pos ( const Csr_Pos_t abs_pos ) const
+        {
+        Assert( abs_pos.abs_pos && abs_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ), 
+            "Needs to be absolute position and/or pos not 0 <= x <= 40\n" );
+
+        Csr_Pos_t rel_pos( abs_pos.row, 
+                           ( abs_pos.pos - disp_strt_pos ), 
+                           false );
+        if ( disp_strt_pos > abs_pos.pos )
+            rel_pos.pos + get_display_upper_pos( );
+        return abs_pos;
+        } // end rel_to_abs_pos( )
     }; // end LCD_Display
 
 // Erases number of characters from display from cursor.
