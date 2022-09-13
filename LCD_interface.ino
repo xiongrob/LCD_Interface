@@ -158,15 +158,27 @@ void setup() {
   lcd_disp.set_csr_bounds( Cursor_Bounds::Ln_Br );
   delay( 2000 );
   lcd_disp.ret_home( );
+  lcd_disp.type_chars( "Arduino Rules!!!" );
   Serial.print( "done\n" );
+  // lcd_disp.clear_display( false );
 }
 void loop() 
     {
     // put your main code here, to run repeatedly:
+    //
+    lcd_disp.type_chars( "Roomba", { 1, 0 } );
+    delay( 2000 );
+    lcd_disp.clear_row( 1 );
+    lcd_disp.type_chars( "BLE 4ever", { 1, 0 } );
+    delay( 2000 );
+    lcd_disp.clear_row( 1 );
+    //
+    /*
     lcd_disp.clear_display( );
-    lcd_disp.type_chars( "Arduino Rules!!!Roomba", Csr_Pos_t( 0, 0, true ) );
+    lcd_disp.type_chars( "Arduino Rules!!!Roomba" );
     delay( 2000 );
     lcd_disp.clear_display( );
-    lcd_disp.type_chars( "Arduino Rules!!!BLE 4ever", Csr_Pos_t( 0, 0, true ) );
+    lcd_disp.type_chars( "Arduino Rules!!!BLE 4ever" );
     delay( 2000 );
+    */
     }

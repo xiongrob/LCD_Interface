@@ -88,13 +88,23 @@ struct Csr_Pos_t
     {
     int8_t row;
     int8_t pos;
-    bool abs_pos = true; // Uses absolute positioning or not.
+    bool abs_pos = false; // Uses absolute positioning or not.
 
     Csr_Pos_t( const int8_t _row, const int8_t _pos, const bool _abs = false ) 
             : row( _row ), pos( _pos ), abs_pos( _abs )
         {
         } // end Csr_Pos_t( )
 
+    bool operator==( const Csr_Pos_t& rhs ) const 
+        {
+        return row == rhs.row && 
+                pos == rhs.pos && 
+                abs_pos == rhs.abs_pos;
+        } // end operator==( )
+    bool operator!=( const Csr_Pos_t& rhs ) const 
+        {
+        return !( *this == rhs );
+        } // end operator!=( )
     bool valid( const int8_t upper_pos, const bool two_line = true ) const
         {
         return row >= 0 && row < (static_cast <int8_t>( two_line ) + 1 )
@@ -135,7 +145,7 @@ class LCD_Display
     enum func_set disp_info; // Display Information (like display lines and character font)
     Csr_Dir csr_dir;        // What direction does cursor move on write.
     Disp_Shft_on_w shfts_w;  // Does the Display move while writing characters?
-    Csr_Pos_t csr_pos = { 0, 0 }; // Starts at row zero, column zero.
+    Csr_Pos_t csr_pos = { 0, 0, true }; // Starts at row zero, column zero.
     uint8_t disp_strt_pos = 0; // Ranges from 0 to 39 (Used in combination of cursor position to calculate absolute position of cursor).
     Cursor_Bounds csr_bounds = Cursor_Bounds::Continues;
     uint8_t d_c_b : 3; // Display, cursor, and display respectively
@@ -206,7 +216,7 @@ public:
      * Types Characters to Display 
      * EFFECTS: Sends characters in c_string to display (starting at cursor).
      */
-    bool type_chars( const char *c_string, const Csr_Pos_t crsr_pos = Csr_Pos_t( -1, -1, false ) );
+    bool type_chars( const char *c_string, const Csr_Pos_t csr_pos = Csr_Pos_t( -1, -1, false ) );
 
     /*
      * Puts Charcter to Display
@@ -294,7 +304,7 @@ public:
      *          written to either DDRAM or CGRAM.
      *          Also shifts the entire display right when set to decrement or right when incrementing. 
      */
-    void entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp );
+    void entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, const bool check_BF = true );
 
 
     /*

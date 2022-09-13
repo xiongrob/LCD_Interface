@@ -71,7 +71,10 @@ void Csr_Pos_t::print( ) const
     Serial.print( row );
     Serial.print( "\n" );
     Serial.print( "Pos: " );
-    Serial.print( pos );
+    Serial.print( pos );    
+    Serial.print( "\n" );
+    Serial.print( "Abs Pos: " );
+    Serial.print( abs_pos ? "True" : "False" );    
     Serial.print( "\n" );
     } // end print( )
 //---------------------------------------------------------------------------------------------------
@@ -259,14 +262,17 @@ bool LCD_Display::is_good( ) const
 //
 //---------------------------------------------------------------------------------------------------    
 
-bool LCD_Display::type_chars( const char *c_string, const Csr_Pos_t csr_pos )
+bool LCD_Display::type_chars( const char *c_string, const Csr_Pos_t csr_pos_strt )
     {
-    if ( !csr_pos.abs_pos )
-        csr_pos = rel_to_abs_pos( csr_pos );
+    if ( csr_pos_strt != Csr_Pos_t( -1, -1, false ) )
+        {
+        if ( !csr_pos_strt.abs_pos )
+            csr_pos_strt = rel_to_abs_pos( csr_pos_strt );
 
-    if ( csr_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
-        if ( !jmp_abs_pos( csr_pos ) )
-            return false;
+        if ( csr_pos_strt.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
+            if ( !jmp_abs_pos( csr_pos_strt, false ) )
+                return false;
+        } // end if
     for ( char const *ptr = c_string; *ptr; ++ptr )
         {
         put_char( *ptr );
@@ -315,7 +321,7 @@ bool LCD_Display::jmp_abs_pos( const Csr_Pos_t new_pos, const bool check_BF )
 void LCD_Display::goto_next_ln( )
     {
     if ( disp_info & row_bit_c )
-        Assert( jmp_abs_pos(Csr_Pos_t( !csr_pos.row, disp_strt_pos, true )), 
+        Assert( jmp_abs_pos(Csr_Pos_t( !csr_pos.row, disp_strt_pos, true ), false ), 
             "goto_next_ln failed\n" );
     } // end got_to_next_ln( 0)
 
@@ -324,24 +330,25 @@ void LCD_Display::clear_row( const int8_t row_num )
     // Checks if row num is gte to 0 and lt 1 or 2 (depending of display info).
     assert( row_num >= 0 && row_num < ( disp_info & row_bit_c ) + 1 );
 
-    if ( shfts_w == Disp_Shft_on_w::Yes )
-        entry_m_set( csr_dir, Disp_Shft_on_w::No ); // Temporarily
-    
     Csr_Pos_t hold_pos = csr_pos;
     // Move cursor to beginning.
-    jmp_abs_pos( { row_num, 0 } );
+
+    jmp_abs_pos( { row_num, 0, true }, false );
+
+    if ( shfts_w == Disp_Shft_on_w::Yes )
+        entry_m_set( csr_dir, Disp_Shft_on_w::No ); // Temporarily
 
     // Write spaces to all 40 digits
     for ( int n = 0; n < get_display_upper_pos( ); ++n )
         write_CG_DDRAM( ' ', false ); //! Needs to override BF check 
-
+    Assert( csr_pos == Csr_Pos_t( row_num, 0, true ), "Cursor should be back at pos 0" );
     // Restore previous cursor position.
     csr_pos = hold_pos;
-    jmp_abs_pos( csr_pos );
 
     if ( shfts_w == Disp_Shft_on_w::Yes )
         entry_m_set( csr_dir, Disp_Shft_on_w::Yes ); // Change back.
         
+    jmp_abs_pos( csr_pos ); // Ensure that the entry set is properly done.
     } // end clear_row( )
 
 void LCD_Display::shift_cursor ( const Direction dir )
@@ -430,7 +437,7 @@ bool LCD_Display::clear_display( const bool check_BF )
     mpu_interface( inst, check_BF );
 
     // Return the cursor position to {0,0}
-    csr_pos = { 0, 0 };
+    csr_pos = { 0, 0, true };
     disp_strt_pos = 0;
     delay( 1 ); // Wait about 1 milliseconds.
     return true;
@@ -446,19 +453,19 @@ bool LCD_Display::ret_home( const bool check_BF )
     delay( 1 ); // Wait about 1 milliseconds.
 
     // Return the cursor position to {0,0}
-    csr_pos = { 0, 0 };
+    csr_pos = { 0, 0, true };
     disp_strt_pos = 0;
     return true;
     } // end ret_home( )
 
-void LCD_Display::entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp )
+void LCD_Display::entry_m_set( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, const bool check_BF )
     {
     csr_dir = csr_mv;       
     shfts_w = shift_disp;
     uint16_t inst = HD44790U_Inst::entry_m_set;
     inst |= static_cast< uint16_t >( csr_mv ) << 1;
     inst |= static_cast< uint16_t >( shift_disp );
-    mpu_interface( inst );
+    mpu_interface( inst, check_BF );
     } // end ret_home( )
 
 
@@ -498,7 +505,8 @@ void LCD_Display::move_cursor( const Direction dir, const bool check_BF )
                 } // end if
             else if ( old_pos.pos == 0 && dir == Direction::Left )
                 {
-                Assert( jmp_abs_pos( { 0, 39 } ), "move_cursor jump to {0,39} failed\n" );
+                // Need to skip BF flag since we are no longer within 0 and 15 for pos.
+                Assert( jmp_abs_pos( { 0, 39 }, false ), "move_cursor jump to {0,39} failed\n" );
                 } // end else if
             } // end if
         } // end if
@@ -604,10 +612,22 @@ void LCD_Display::mpu_interface( uint16_t& bits, const bool check_BF )
     // assert( is_good( ) );
     const bool is_read = bits & rw_mask_c; // True if read, false if write
 
-    while( check_BF && is_busy( ) ) // Wait until BF==0
+    if ( check_BF)
         {
-        Serial.print( "is_busy\n" );
-        }
+        // uint8_t bf_seen = 0;
+        while( /*bf_seen < 10 && */ is_busy( ) ) // Wait until BF==0 or seen bf too many times
+            {
+            Serial.print( "is_busy\n" );
+            // ++bf_seen;
+            } // end while
+        } // end if
+    //! This is a workaround since we cannot gurantee that instruction won't be
+    //! eaten since checking the BF flag outside a certain range cannot be done properly
+    //! By simply waiting long enough this should ensure that most instructions are done.
+    else 
+        {
+        delay( 1 );
+        }  // end else
 
     if ( is_read )
         bits |= read( bits & rs_mask_c );
