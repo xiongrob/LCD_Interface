@@ -53,14 +53,14 @@ static bool check_db( const int8_t data_bus[ 8 ], const MPU_bit_interf bit_inter
     return true;
     } // end check_db( )
 
-void Assert( const bool statement, char const * c_string )
+void Assert( const bool statement, char const *c_string )
     {
     if ( !statement )
         {  
         for ( ; *c_string; ++c_string )
             Serial.print( *c_string );
         
-        delay( 1000 ); // Give enough time for characters to be pushed through serial port.
+        delay( 10 * strlen( c_string ) ); // Give enough time for characters to be pushed through serial port.
         assert( false );
         } // end if
     } // end Assert( )
@@ -621,7 +621,7 @@ void LCD_Display::mpu_interface( uint16_t& bits, const bool check_BF )
             // ++bf_seen;
             } // end while
         } // end if
-    //! This is a workaround since we cannot gurantee that instruction won't be
+    //! This is a workaround since we cannot guarantee that instructions won't be
     //! eaten since checking the BF flag outside a certain range cannot be done properly
     //! By simply waiting long enough this should ensure that most instructions are done.
     else 

@@ -48,16 +48,6 @@ enum Data_Bit
     DB7 = 0b10000000, 
     };
 
-
-// S/C R/L
-enum shift_func
-    {
-    shift_pos_left  = 0b0000,
-    shift_pos_right = 0b0100,
-    shift_disp_left = 0b1000,
-    shift_disp_right= 0b1000,
-    };
-
 /// N(Number of display lines) F(char Font)
 enum func_set
     {
@@ -256,7 +246,6 @@ public:
      * EFFECTS: Toggles display, cursor, and cursor blink on->off off->on.
      */
     void toggle_display( );
-
     void toggle_cursor( );
     void toggle_cursor_blink( );
 
