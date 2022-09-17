@@ -62,6 +62,8 @@ const int lower_pos_c  = 0;
 const int upper_rel_pos_c  = 16;
 const uint8_t disp_offset_c[ 2 ] = { 0x0, 0x40 };
 
+const int INVALID_PIN_c = -1;
+
 
 /*
  * Cursor Position Type.
@@ -259,12 +261,39 @@ public:
         } // end get_display_upper_pos( )
 
     // Returns 0x80 if not valid
-    uint8_t csr_to_DDRAM_ADDR( const Csr_Pos_t csr_pos ) const
+    uint8_t csr_to_DDRAM_addr( const Csr_Pos_t csr_pos ) const
         {  
         if ( !csr_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ) )
-            return 0x68; // Address 104 (not valid)
+            return 0x68; // address 104 (not valid)
         return disp_offset_c[ csr_pos.row ] + csr_pos.pos;
-        } // end csr_to_DDRAM_ADDR( )
+        } // end csr_to_ddram_addr( )
+
+    Csr_Pos_t rel_to_abs_pos ( const Csr_Pos_t rel_pos ) const;
+
+    // Absolute Pos to relative (to display_pos_start).
+    // What this means is that the position disp_strt_pos is taken
+    // as 0 and disp_strt_pos - 1, get_display_upper_pos( ) - 1.
+    // This means that 0 <= rel_pos <= get_display_upper_pos( ) - 1
+    // Still but rotated around disp_strt_pos.
+    Csr_Pos_t abs_to_rel_pos ( const Csr_Pos_t abs_pos ) const;
+
+private:
+    /*
+     * Update Display Start Position.
+     * EFFECTS: Updates the leftmost starting position of the
+     *          display to be 
+     */
+    void update_disp_strt_pos( const Direction disp_mv_dir );
+    /*
+     * Update Cursor Postiion
+     * EFFECTS: Updates the absolute cursor position (csr_pos)
+     *                    
+     */
+    void update_csr_pos( const Direction disp_mv_dir );
+    
+    int8_t update_pos_helper( int8_t curr_pos, const Direction mv_dir, const Direction mv_right ) const;
+
+public:
 
 //---------------------------------------------------------------------------------------------------
 //
@@ -324,7 +353,7 @@ public:
      * ***Note: Number of display lines (N) and character font (F) can only be set once after interface data length is changed.
      *          Also perform before executing any instructions (EXECPT is_busy or reading address instructions).
      */
-    void function_set( const MPU_bit_interf bit_interface, const enum func_set n_f, const bool check_BF = false );
+    void function_set( const MPU_bit_interf bit_interface, const enum func_set n_f, const bool check_BF = true );
 
     /* 
      * Set CGRAM Address
@@ -414,73 +443,5 @@ public:
      *          This is so they can be properly configured to read or write to the MPU interface.
      */
     void set_db_io( const int pin_mode ) const;
-
-private:
-    /*
-     * Update Display Start Position.
-     * EFFECTS: Updates the leftmost starting position of the
-     *          display to be 
-     */
-    void update_disp_strt_pos( const Direction disp_mv_dir )
-        {
-        disp_strt_pos = update_pos_helper( disp_strt_pos, disp_mv_dir, Direction::Left );
-        } // end update_disp_strt_pos( )
-    /*
-     * Update Cursor Postiion
-     * EFFECTS: Updates the absolute cursor position (csr_pos)
-     *                    
-     */
-    void update_csr_pos( const Direction disp_mv_dir )
-        {
-        csr_pos.pos = update_pos_helper( csr_pos.pos, disp_mv_dir, Direction::Right );
-        } // end update_csr_pos( )
-    
-    int8_t update_pos_helper( int8_t curr_pos, const Direction mv_dir, const Direction mv_right ) const
-        {
-        assert( mv_dir == Direction::Left || mv_dir == Direction::Right );
-        curr_pos += ( mv_dir == mv_right ? 1 : get_display_upper_pos( ) - 1 );
-        curr_pos %= get_display_upper_pos( );
-        return curr_pos;
-        } // end update_pos_helper( )
-
-    Csr_Pos_t rel_to_abs_pos ( const Csr_Pos_t rel_pos ) const
-        {
-        Assert( !rel_pos.abs_pos && rel_pos.valid( upper_rel_pos_c, disp_info & row_bit_c ), 
-            "Needs to be relative position and/or pos not 0 <= x <= 16\n" );
-
-        Csr_Pos_t abs_pos( rel_pos.row, 
-                           (disp_strt_pos + rel_pos.pos) % get_display_upper_pos( ), 
-                           true );
-        return abs_pos;
-        } // end rel_to_abs_pos( )
-
-    // Absoulte Pos to relative (to display_pos_start.
-    // What this means is that the position disp_strt_pos is taken
-    // as 0 and disp_strt_pos - 1, get_display_upper_pos( ) - 1.
-    // This means that 0 <= rel_pos <= get_display_upper_pos( ) - 1
-    // Still but rotated around disp_strt_pos.
-    Csr_Pos_t abs_to_rel_pos ( const Csr_Pos_t abs_pos ) const
-        {
-        Assert( abs_pos.abs_pos && abs_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ), 
-            "Needs to be absolute position and/or pos not 0 <= x <= 40\n" );
-
-        Csr_Pos_t rel_pos( abs_pos.row, 
-                           ( abs_pos.pos - disp_strt_pos ), 
-                           false );
-        if ( disp_strt_pos > abs_pos.pos )
-            rel_pos.pos + get_display_upper_pos( );
-        return abs_pos;
-        } // end rel_to_abs_pos( )
     }; // end LCD_Display
-
-// Erases number of characters from display from cursor.
-// Essentially sends entry mode instruction 
-
-enum class Cursor_state
-    {
-    Normal,
-    Edge_Dec,
-    Edge_Inc,
-    };
-
 #endif

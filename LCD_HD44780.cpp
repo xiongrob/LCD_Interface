@@ -60,7 +60,7 @@ void Assert( const bool statement, char const *c_string )
         for ( ; *c_string; ++c_string )
             Serial.print( *c_string );
         
-        delay( 10 * strlen( c_string ) ); // Give enough time for characters to be pushed through serial port.
+        delay( 1000 * strlen( c_string ) ); // Give enough time for characters to be pushed through serial port.
         assert( false );
         } // end if
     } // end Assert( )
@@ -149,6 +149,7 @@ bool LCD_Display::attach_LCD_display( const int8_t _data_bus[ 8 ], const uint8_t
     set_register_sel( _rs );
     set_read_write( _rw );
     set_enable( _e );
+    set_bit_interface( bit_inter );
 
     print_pins( );
     disp_info = n_f;
@@ -159,7 +160,7 @@ bool LCD_Display::attach_LCD_display( const int8_t _data_bus[ 8 ], const uint8_t
 
 void LCD_Display::init_LCD( const Csr_Dir csr_mv, const Disp_Shft_on_w shift_disp, const bool csr_on, const bool csr_blinks )
     {
-    init_LCD( interface_m, disp_info, csr_mv, shfts_w, csr_on, csr_blinks );
+    init_LCD( interface_m, disp_info, csr_mv, shift_disp, csr_on, csr_blinks );
     } // end init_LCD( )
 
 // Initiailzation By Instructions B/c necessary if the power supply conditions for correctly operating
@@ -173,7 +174,9 @@ void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set 
     
     has_been_called = true; // Ensures only is done once.
 
-    assert( is_good( ) );
+    interface_m = bit_inter; // Needs to be done before is_good is called.
+    Assert( is_good( ), "Something is wrong with the pins(From is_good( ))\n" );
+
     // 1) Wait for more than 15 ms after Vcc rises to 4.5 V (or 40 ms after Vcc rises to 2.7 V)
     delay( 40 );
 
@@ -191,7 +194,6 @@ void LCD_Display::init_LCD( const MPU_bit_interf bit_inter, const enum func_set 
     function_set( MPU_bit_interf::Eight, func_set::one_line_5x10, false );
 
     // Now BF can be checked for following instructions
-    interface_m = bit_inter; // Change back to original
 
     // Function set (specify number of display lines and character font).
     //! Number of display lines and character font cannot be changed after this point
@@ -226,18 +228,21 @@ void LCD_Display::set_register_sel( const uint8_t rs_pin )
     { 
     rs = rs_pin; 
     pinMode( rs, OUTPUT );
+    Assert( get_pinMode( rs ) == OUTPUT, "RS isn't OUTPUT\n" );
     } // end set_register_sel( )
 
 void LCD_Display::set_read_write( const uint8_t rw_pin )
     { 
     rw = rw_pin; 
     pinMode( rw, OUTPUT );
+    Assert( get_pinMode( rw ) == OUTPUT, "RW isn't OUTPUT\n" );
     } // end set_read_write( )
 
 void LCD_Display::set_enable( const uint8_t e_pin )
     { 
     en = e_pin; 
     pinMode( en, OUTPUT );
+    Assert( get_pinMode( en ) == OUTPUT, "EN isn't OUTPUT\n" );
     } // end set_enable( )
 
 
@@ -253,7 +258,8 @@ bool LCD_Display::is_good( ) const
             && get_pinMode( rs ) == OUTPUT
             && rw != -1
             && get_pinMode( rw ) == OUTPUT
-            && en != -1;
+            && en != -1
+            && get_pinMode( en ) == OUTPUT;
     } // end is_good( )
 
 //---------------------------------------------------------------------------------------------------
@@ -296,8 +302,8 @@ void LCD_Display::put_char( const char character )
         } // end if
     // Else keep going.
     // Update cursor position
+    write_CG_DDRAM( character, can_chk_bf( ) );
     update_csr_pos( Direction::Right );
-    write_CG_DDRAM( character );
     } // end put_char( )
 
 bool LCD_Display::jmp_abs_pos( const Csr_Pos_t new_pos, const bool check_BF )
@@ -314,7 +320,7 @@ bool LCD_Display::jmp_abs_pos( const Csr_Pos_t new_pos, const bool check_BF )
 
     // Ensures a range of [0, 40] for row one
     // and [0x40 to 0x67] for row two.
-    set_DDRAM_addr( csr_to_DDRAM_ADDR( new_pos ), check_BF ); 
+    set_DDRAM_addr( csr_to_DDRAM_addr( new_pos ), check_BF ); 
     return true;
     } // end jmp_abs_pos( )
 
@@ -423,6 +429,48 @@ void LCD_Display::toggle_cursor_blink( )
     display_state_control( d_c_b & DB2, d_c_b & DB1, d_c_b & DB0 );
     } // end toggle_cursor_blink( )
 
+Csr_Pos_t LCD_Display::rel_to_abs_pos ( const Csr_Pos_t rel_pos ) const
+        {
+        Assert( !rel_pos.abs_pos && rel_pos.valid( upper_rel_pos_c, disp_info & row_bit_c ), 
+            "Needs to be relative position and/or pos not 0 <= x <= 16\n" );
+
+        Csr_Pos_t abs_pos( rel_pos.row, 
+                           (disp_strt_pos + rel_pos.pos) % get_display_upper_pos( ), 
+                           true );
+        return abs_pos;
+        } // end rel_to_abs_pos( )
+
+Csr_Pos_t LCD_Display::abs_to_rel_pos ( const Csr_Pos_t abs_pos ) const
+        {
+        Assert( abs_pos.abs_pos && abs_pos.valid( get_display_upper_pos( ), disp_info & row_bit_c ), 
+            "Needs to be absolute position and/or pos not 0 <= x <= 40\n" );
+
+        Csr_Pos_t rel_pos( abs_pos.row, 
+                           ( abs_pos.pos - disp_strt_pos ), 
+                           false );
+        if ( disp_strt_pos > abs_pos.pos )
+            rel_pos.pos + get_display_upper_pos( );
+        return rel_pos;
+        } // end rel_to_abs_pos( )
+
+void LCD_Display::update_disp_strt_pos( const Direction disp_mv_dir )
+    {
+    disp_strt_pos = update_pos_helper( disp_strt_pos, disp_mv_dir, Direction::Left );
+    } // end update_disp_strt_pos( )
+
+void LCD_Display::update_csr_pos( const Direction disp_mv_dir )
+    {
+    csr_pos.pos = update_pos_helper( csr_pos.pos, disp_mv_dir, Direction::Right );
+    } // end update_csr_pos( )
+
+int8_t LCD_Display::update_pos_helper( int8_t curr_pos, const Direction mv_dir, const Direction mv_right ) const
+    {
+    assert( mv_dir == Direction::Left || mv_dir == Direction::Right );
+    curr_pos += ( mv_dir == mv_right ? 1 : get_display_upper_pos( ) - 1 );
+    curr_pos %= get_display_upper_pos( );
+    return curr_pos;
+    } // end update_pos_helper( )
+
 //---------------------------------------------------------------------------------------------------
 //
 //                                     MPU Interface Definitions
@@ -439,7 +487,7 @@ bool LCD_Display::clear_display( const bool check_BF )
     // Return the cursor position to {0,0}
     csr_pos = { 0, 0, true };
     disp_strt_pos = 0;
-    delay( 1 ); // Wait about 1 milliseconds.
+    delay( 10 ); // Wait about 10 milliseconds.
     return true;
     } // end clear_display( )
 
@@ -450,7 +498,7 @@ bool LCD_Display::ret_home( const bool check_BF )
     Serial.print( "In ret_home\n" );
     uint16_t inst = HD44790U_Inst::ret_home;
     mpu_interface( inst, check_BF );
-    delay( 1 ); // Wait about 1 milliseconds.
+    delay( 10 ); // Wait about 10 milliseconds.
 
     // Return the cursor position to {0,0}
     csr_pos = { 0, 0, true };
@@ -542,12 +590,13 @@ void LCD_Display::function_set( const MPU_bit_interf bit_interface, const enum f
 #ifdef DEBUG
     Serial.print( "In function_set\n" );
 #endif
-    interface_m = bit_interface;
-    disp_info = n_f;
     uint16_t inst = HD44790U_Inst::func_set;
     inst |= static_cast< uint16_t > ( bit_interface ) << 4; // DL (Data Length)
     inst |= static_cast< uint16_t > ( n_f ) << 2;           // N+F (N)umber of DL + char (F)ont
     mpu_interface( inst, check_BF );
+
+    set_bit_interface( bit_interface ); // Needs to be done after mpu_interface (Since it still requires prev interface)
+    disp_info = n_f;
     } // end function_set( 0)
 
 void LCD_Display::set_CGRAM_addr( const uint8_t addr_counter )
@@ -612,13 +661,13 @@ void LCD_Display::mpu_interface( uint16_t& bits, const bool check_BF )
     // assert( is_good( ) );
     const bool is_read = bits & rw_mask_c; // True if read, false if write
 
-    if ( check_BF)
+    if ( check_BF )
         {
         // uint8_t bf_seen = 0;
-        while( /*bf_seen < 10 && */ is_busy( ) ) // Wait until BF==0 or seen bf too many times
+        while( /* bf_seen < 10 && */ is_busy( ) ) // Wait until BF==0 or seen bf too many times
             {
             Serial.print( "is_busy\n" );
-            // ++bf_seen;
+            //++bf_seen;
             } // end while
         } // end if
     //! This is a workaround since we cannot guarantee that instructions won't be

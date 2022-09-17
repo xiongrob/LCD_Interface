@@ -125,19 +125,28 @@ void setup() {
     lcd_disp.move_cursor( Direction::Left );
 } // end setup( )
 */
+/// Register Select (RS) Pin for LCD
+const int RS  = 2;
+/// Read Write (RW) Pin for LCD
+const int RW  = 4;
+/// Enable Pin for LCD
+const int EN_LCD = 6;
+
+/// DB7-DB0 Pins 
+const int8_t DBX[ 8 ] = { -1, -1, -1, -1, 14, 15, 16, 17 }; // Use A0-A3
+
 void setup() {
   Serial.begin( 9600 );
   // put your setup code here, to run once:
   //int8_t db[ 8 ] = { -1, -1, -1, -1, 5, 6, 7, 8 };
   int8_t db[ 8 ] = { 9, 10, 11, 12, 5, 6, 7, 8 };
+  //int8_t db[ 8 ] = { -1, -1, -1, -1, 5, 6, 7, 8 };
   Serial.print( "After db\n" );
-  lcd_disp.attach_LCD_display( db, 2, 3, 4, MPU_bit_interf::Eight, two_line_5x8 );
+  lcd_disp.attach_LCD_display( DBX, RS, RW, EN_LCD, MPU_bit_interf::Four, two_line_5x8 );
+  //lcd_disp.attach_LCD_display( db, 2, 3, 4, MPU_bit_interf::Four, two_line_5x8 );
   lcd_disp.init_LCD( Csr_Dir::Increment, Disp_Shft_on_w::No, true, true );
-  lcd_disp.clear_display( );
   Serial.print( "Got here\n" );
-  lcd_disp.display_state_control( true, true, true );
-  lcd_disp.entry_m_set( Csr_Dir::Increment, Disp_Shft_on_w::No );
-  lcd_disp.ret_home( );
+  
   lcd_disp.write_CG_DDRAM( 'H' );
   lcd_disp.write_CG_DDRAM( 'I' );
   lcd_disp.write_CG_DDRAM( 'T' );
@@ -145,8 +154,8 @@ void setup() {
   lcd_disp.write_CG_DDRAM( 'C' );
   lcd_disp.write_CG_DDRAM( 'H' );
   lcd_disp.write_CG_DDRAM( 'I' );
+  delay( 1000 );
   lcd_disp.clear_display( );
-
   lcd_disp.put_char( 'H' );
   lcd_disp.put_char( 'I' );
   lcd_disp.put_char( '!' );
